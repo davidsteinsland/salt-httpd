@@ -1,0 +1,13 @@
+# HTTP Server Settings
+# ====================
+server = {
+    # Which port to bind to
+    port = "8282";
+    # Which address to bind to
+    address = "0.0.0.0";
+};
+
+www = {
+    root = "htdocs";
+    errors = "errors";
+};
