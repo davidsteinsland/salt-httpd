@@ -8,6 +8,8 @@ server = {
 };
 
 www = {
+    # Path to document root
     root = "htdocs";
+    # Path to error templates
     errors = "errors";
 };

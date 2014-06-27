@@ -9,6 +9,8 @@
 #include <event2/http.h>
 #include <event2/http_struct.h>
 #include <event2/thread.h>
+#include <event2/keyvalq_struct.h>
+
 #include <stdio.h>
 #include <fcntl.h>
 
@@ -64,6 +66,7 @@ static const char* guess_content_type(const char *path) {
 
 void handle_request(evhttp_request *req, void* arg) {
   std::string document_root = (const char*)arg;
+  document_root = string::utils::chop(document_root, "/");
 
   auto *outputBuffer = evhttp_request_get_output_buffer(req);
     
@@ -71,40 +74,36 @@ void handle_request(evhttp_request *req, void* arg) {
     return;
   }
 
-  const char* reqline(evhttp_request_get_uri(req));
+  // const char* host = evhttp_find_header(evhttp_request_get_input_headers(req), "Host");
+  const char* request_uri = evhttp_request_get_uri(req);
 
   std::stringstream ss;
-  ss << string::utils::chop(document_root, "/") << reqline;
+  ss << document_root << request_uri;
+  std::string request_uri_parsed = ss.str();
 
   auto status = HTTP_OK;
 
-  if (io::utils::isDirectory(ss.str())) {
-    ss << "index.html";
+  if (request_uri_parsed.back() == '/') {
+    request_uri_parsed += "index.html";
   }
 
-  if (!io::utils::isFile(ss.str())) {
-    ss.str("");
-    ss << string::utils::chop(cfg.getString("www.errors"), "/") << "/404.html";
+  if (!io::utils::isFile(request_uri_parsed)) {
+    request_uri_parsed = string::utils::chop(cfg.getString("www.errors"), "/") + "/404.html";
     status = HTTP_NOTFOUND;
+
+    if (!io::utils::isFile(request_uri_parsed)) {
+      evbuffer_add_printf(outputBuffer, "404: File not found");
+      evhttp_send_reply(req, status, "Not Found", outputBuffer);
+      return;
+    }
   }
 
-  std::string reqfile = ss.str();
-
-  if (!io::utils::isFile(reqfile)) {
-    std::cerr << "Not found: " << reqfile << std::endl;
-
-    evbuffer_add_printf(outputBuffer, "404: File not found");
-    evhttp_send_reply(req, HTTP_NOTFOUND, "Not Found", outputBuffer);
-    return;
-  }
-
-  const char *type = guess_content_type(reqfile.c_str());
-
-  int file = open(reqfile.c_str(), O_RDONLY);
+  const char* filename = request_uri_parsed.c_str();
+  const char* type = guess_content_type(filename);
+  int file = open(filename, O_RDONLY);
   
   evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", type);
-  evbuffer_add_file(outputBuffer, file, 0, io::utils::filesize(reqfile));
-
+  evbuffer_add_file(outputBuffer, file, 0, io::utils::filesize(request_uri_parsed));
   evhttp_send_reply(req, status, "", outputBuffer);
 }
 
@@ -192,7 +191,7 @@ int main(int argc, char** argv) {
 
   const char* document_root = cfg.getString("www.root").c_str();
 
-   evhttp_set_gencb(http, handle_request_cb, (void*)(document_root));
+  evhttp_set_gencb(http, handle_request_cb, (void*)(document_root));
   handle = evhttp_bind_socket_with_handle(http, cfg.getString("listen.address").c_str(), cfg.getInt("listen.port"));
 
   if (!handle) {

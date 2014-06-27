@@ -4,7 +4,7 @@ AUTOMAKE_OPTIONS=subdir-objects
 AM_CFLAGS=
 
 # C++ compiler flags (compiling/linking)
-AM_CXXFLAGS=-Wall
+AM_CXXFLAGS=-Wall -ggdb
 
 # C preprocessor flags
 AM_CPPFLAGS=-D_GLIBCXX_USE_NANOSLEEP
