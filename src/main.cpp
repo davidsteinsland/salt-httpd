@@ -68,13 +68,12 @@ void handle_request(evhttp_request *req, void* arg) {
   std::string document_root = (const char*)arg;
   document_root = string::utils::chop(document_root, "/");
 
-  auto *outputBuffer = evhttp_request_get_output_buffer(req);
+  struct evbuffer* buf = evhttp_request_get_output_buffer(req);
     
-  if (!outputBuffer) {
+  if (!buf) {
     return;
   }
 
-  // const char* host = evhttp_find_header(evhttp_request_get_input_headers(req), "Host");
   const char* request_uri = evhttp_request_get_uri(req);
 
   std::stringstream ss;
@@ -83,17 +82,13 @@ void handle_request(evhttp_request *req, void* arg) {
 
   auto status = HTTP_OK;
 
-  if (request_uri_parsed.back() == '/') {
-    request_uri_parsed += "index.html";
-  }
-
   if (!io::utils::isFile(request_uri_parsed)) {
     request_uri_parsed = string::utils::chop(cfg.getString("www.errors"), "/") + "/404.html";
     status = HTTP_NOTFOUND;
 
     if (!io::utils::isFile(request_uri_parsed)) {
-      evbuffer_add_printf(outputBuffer, "404: File not found");
-      evhttp_send_reply(req, status, "Not Found", outputBuffer);
+      evbuffer_add_printf(buf, "404: File not found");
+      evhttp_send_reply(req, status, "Not Found", buf);
       return;
     }
   }
@@ -103,14 +98,25 @@ void handle_request(evhttp_request *req, void* arg) {
   int file = open(filename, O_RDONLY);
   
   evhttp_add_header(evhttp_request_get_output_headers(req), "Content-Type", type);
-  evbuffer_add_file(outputBuffer, file, 0, io::utils::filesize(request_uri_parsed));
-  evhttp_send_reply(req, status, "", outputBuffer);
+  evbuffer_add_file(buf, file, 0, io::utils::filesize(request_uri_parsed));
+  evhttp_send_reply(req, status, "", buf);
 }
+
+/*void handle_vhost_cb(evhttp_request* req, void* arg) {
+  struct evbuffer* buf = evhttp_request_get_output_buffer(req);
+  evbuffer_add_printf(buf, "Hello, World!");
+  evhttp_send_reply(req, HTTP_OK, "OK", buf);
+}*/
 
 void handle_request_cb(evhttp_request *req, void* arg) {
   thread_pool.push(handle_request, req, arg);
 }
 
+static void signal_cb(evutil_socket_t fd, short event, void *arg) {
+  struct event_base* base = (struct event_base*)arg;
+  event_base_loopbreak(base);
+  thread_pool.shutdown();
+}
 
 int main(int argc, char** argv) {
   config::ConfigDescriptor cfgdesc;
@@ -173,7 +179,6 @@ int main(int argc, char** argv) {
 
   struct event_base* base;
   struct evhttp* http;
-  struct evhttp_bound_socket* handle;
 
   base = event_base_new();
 
@@ -181,6 +186,9 @@ int main(int argc, char** argv) {
     std::cerr << "Failed to create event base." << std::endl;
     return 1;
   }
+
+  struct event* signal_int = evsignal_new(base, SIGINT, signal_cb, base);
+  event_add(signal_int, NULL);
 
   http = evhttp_new(base);
 
@@ -191,10 +199,17 @@ int main(int argc, char** argv) {
 
   const char* document_root = cfg.getString("www.root").c_str();
 
+  evhttp_set_allowed_methods(http, EVHTTP_REQ_GET);
   evhttp_set_gencb(http, handle_request_cb, (void*)(document_root));
-  handle = evhttp_bind_socket_with_handle(http, cfg.getString("listen.address").c_str(), cfg.getInt("listen.port"));
 
-  if (!handle) {
+  // vhost
+  /*struct evhttp* vhost = evhttp_new(base);
+  evhttp_set_allowed_methods(vhost, EVHTTP_REQ_GET);
+  evhttp_set_gencb(vhost, handle_vhost_cb, (void*)(document_root));
+
+  evhttp_add_virtual_host(http, "cdn.example.com", vhost);*/
+
+  if (evhttp_bind_socket(http, cfg.getString("listen.address").c_str(), cfg.getInt("listen.port")) == -1) {
     std::cerr << "Failed to bind to address." << std::endl;
     return 1;
   }
@@ -205,6 +220,9 @@ int main(int argc, char** argv) {
     std::cerr << "Failed to start event thread." << std::endl;
     return -1;
   }
+
+  evhttp_free(http);
+  event_base_free(base);
 
   return 0;
 }
